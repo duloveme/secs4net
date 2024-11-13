@@ -121,7 +121,7 @@ public sealed class SecsGem : ISecsGem, IDisposable
 #if NET
         catch (TimeoutException)
         {
-            _logger.Error($"T3 Timeout[id=0x{id:X8}]: {T3 / 1000} sec.");
+            _logger.Error($"T3 Timeout[id=0x{id:X8}]: {T3 / 1000} sec. : S{message.S}F{message.F}");
             throw new SecsException(message, Resources.T3Timeout);
         }
 #endif
