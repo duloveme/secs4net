@@ -59,6 +59,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
     private const int DisposalNotStarted = 0;
     private const int DisposalComplete = 1;
     private int _disposeStage;
+    private bool _connected;
 
     public bool IsDisposed
         => Interlocked.CompareExchange(ref _disposeStage, DisposalComplete, DisposalComplete) == DisposalComplete;
@@ -107,13 +108,15 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
         _timer7 = new Timer(delegate
         {
             _logger.Error($"T7 Timeout: {T7 / 1000} sec.");
-            CommunicationStateChanging(ConnectionState.Retry);
+            //CommunicationStateChanging(ConnectionState.Retry);
+            Reconnect();
         }, null, Timeout.Infinite, Timeout.Infinite);
 
         _timer8 = new Timer(delegate
         {
             _logger.Error($"T8 Timeout: {T8 / 1000} sec.");
-            CommunicationStateChanging(ConnectionState.Retry);
+            //CommunicationStateChanging(ConnectionState.Retry);
+            Reconnect();
         }, null, Timeout.Infinite, Timeout.Infinite);
 
         _timerLinkTest = new Timer(delegate
@@ -132,7 +135,8 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
         {
             _startImpl = async cancellation =>
             {
-                var connected = false;
+                var threadName = System.Threading.Thread.CurrentThread.Name;                
+                _connected = false;
                 do
                 {
                     if (IsDisposed)
@@ -143,6 +147,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
                     CommunicationStateChanging(ConnectionState.Connecting);
                     try
                     {
+                        _logger.Debug($"start connect socket : {System.Threading.Thread.CurrentThread.ManagedThreadId}");
                         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
                         {
                             Blocking = false,
@@ -153,10 +158,10 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
 #else
                         await socket.ConnectAsync(IpAddress, Port).WithCancellation(cancellation).ConfigureAwait(false);
 #endif
-
+                        _reconnecting = false;
                         _socket = socket;
                         CommunicationStateChanging(ConnectionState.Connected);
-                        connected = true;
+                        _connected = true;
                     }
                     catch (Exception ex) when (!IsDisposed)
                     {
@@ -164,7 +169,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
                         _logger.Info($"Start T5 Timer: {T5 / 1000} sec.");
                         await Task.Delay(T5, cancellation).ConfigureAwait(false);
                     }
-                } while (!connected);
+                } while (!_connected);
 
                 await SendControlMessage(MessageType.SelectRequest, MessageIdGenerator.NewId(), cancellation).ConfigureAwait(false);
             };
@@ -199,7 +204,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
                         _socket = await server.AcceptAsync().WithCancellation(cancellation).ConfigureAwait(false);
 #endif
                         _socket.Blocking = false;
-                        _socket.ReceiveBufferSize = _socketReceiveBufferSize;
+                        _socket.ReceiveBufferSize = _socketReceiveBufferSize;                        
                         CommunicationStateChanging(ConnectionState.Connected);
                         connected = true;
                     }
@@ -223,6 +228,8 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
 
     private void Disconnect()
     {
+        _connected = false;
+        _logger.Info($"Disconnect");
         _timer7.Change(Timeout.Infinite, Timeout.Infinite);
         _timer8.Change(Timeout.Infinite, Timeout.Infinite);
         StopPipeDecoder(ref _cancellationTokenSourceForPipeDecoder);
@@ -244,6 +251,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
 
     public void Start(CancellationToken cancellation)
     {
+        _logger.Info("Start");
         _stoppingToken = cancellation;
         Task.Run(() => _startImpl(cancellation), cancellation);
     }
@@ -303,6 +311,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
     {
         if (cancellationTokenSource is { IsCancellationRequested: false })
         {
+            _logger.Info($"StopPipeDecoder");
             cancellationTokenSource.Cancel();
             cancellationTokenSource.Dispose();
             cancellationTokenSource = null;
@@ -311,9 +320,24 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
             _pipe.Reset();
         }
     }
-
+    private bool _reconnecting;
     public void Reconnect()
-        => CommunicationStateChanging(ConnectionState.Retry);
+    {
+        //if (_connected)
+        //{
+        //    _logger.Info("Already connected");
+        //    return;
+        //}
+        if (_reconnecting)
+        {
+            _logger.Info("Already reconnecting");
+            return;
+        }
+        _reconnecting = true;
+        _logger.Info($"Try reconnecting");
+        CommunicationStateChanging(ConnectionState.Retry);
+    }
+        
 
     private void CommunicationStateChanging(ConnectionState newState)
     {
@@ -342,7 +366,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
                 {
                     return;
                 }
-
+                _logger.Info($"Reconnecting");
                 Disconnect();
                 Start(_stoppingToken);
                 break;
@@ -409,7 +433,10 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
                     await SendControlMessage(MessageType.LinkTestResponse, header.Id, cancellation).ConfigureAwait(false);
                     break;
                 case MessageType.SeparateRequest:
-                    CommunicationStateChanging(ConnectionState.Retry);
+                    _logger.Info("MessageType.SeparateRequest. Retry");
+                    _connected = false;
+                    //CommunicationStateChanging(ConnectionState.Retry);
+                    Reconnect();
                     break;
             }
         }
@@ -442,7 +469,8 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
                 if (await Task.WhenAny(token.Task, Task.Delay(T6, cancellation)).ConfigureAwait(false) != token.Task)
                 {
                     _logger.Error($"T6 Timeout[id=0x{id:X8}]: {T6 / 1000} sec.");
-                    CommunicationStateChanging(ConnectionState.Retry);
+                    //CommunicationStateChanging(ConnectionState.Retry);
+                    Reconnect();
                 }
 #endif
             }
@@ -451,13 +479,15 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
         catch (TimeoutException)
         {
             _logger.Error($"T6 Timeout[id=0x{id:X8}]: {T6 / 1000} sec.");
-            CommunicationStateChanging(ConnectionState.Retry);
+            //CommunicationStateChanging(ConnectionState.Retry);
+            Reconnect();
         }
 #endif
         catch (Exception ex)
         {
             _logger.Error($"Unknown exception occurred when send control messages", ex);
-            CommunicationStateChanging(ConnectionState.Retry);
+            //CommunicationStateChanging(ConnectionState.Retry);
+            Reconnect();
         }
         finally
         {

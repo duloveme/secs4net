@@ -27,6 +27,8 @@ internal sealed class DeviceWorker : BackgroundService
                      _logger.LogError($"Connection loss, try to reconnect.");
                      break;
                  case ConnectionState.Connecting:
+                     _logger.LogError($"Connecting.");
+                     break;
                  case ConnectionState.Connected:
                      _logger.LogWarning(_hsmsConnection.State.ToString());
                      break;
