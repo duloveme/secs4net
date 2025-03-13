@@ -468,7 +468,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
 #else
                 if (await Task.WhenAny(token.Task, Task.Delay(T6, cancellation)).ConfigureAwait(false) != token.Task)
                 {
-                    _logger.Error($"T6 Timeout[id=0x{id:X8}]: {T6 / 1000} sec.");
+                    _logger.Error($"T6 Timeout[id=0x{id:X8}]: {T6 / 1000} sec. {msgType}");
                     //CommunicationStateChanging(ConnectionState.Retry);
                     Reconnect();
                 }
@@ -478,7 +478,7 @@ public sealed class HsmsConnection : ISecsConnection, IAsyncDisposable
 #if NET
         catch (TimeoutException)
         {
-            _logger.Error($"T6 Timeout[id=0x{id:X8}]: {T6 / 1000} sec.");
+            _logger.Error($"T6 Timeout[id=0x{id:X8}]: {T6 / 1000} sec. {msgType}");
             //CommunicationStateChanging(ConnectionState.Retry);
             Reconnect();
         }
